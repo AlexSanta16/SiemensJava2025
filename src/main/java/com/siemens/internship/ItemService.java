@@ -3,19 +3,27 @@ package com.siemens.internship;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.*;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.CopyOnWriteArrayList;
 
 @Service
 public class ItemService {
+
     @Autowired
     private ItemRepository itemRepository;
-    private static ExecutorService executor = Executors.newFixedThreadPool(10);
-    private List<Item> processedItems = new ArrayList<>();
-    private int processedCount = 0;
+    private static final Logger logger = LoggerFactory.getLogger(ItemService.class);
+    private static final ExecutorService executor = Executors.newFixedThreadPool(10);
+
+    // Used CopyOnWriteArrayList to make the list thread-safe
+    private List<Item> processedItems = new CopyOnWriteArrayList<>();
+    private AtomicInteger processedCount = new AtomicInteger(0);
 
 
     public List<Item> findAll() {
@@ -34,54 +42,47 @@ public class ItemService {
         itemRepository.deleteById(id);
     }
 
-
-    /**
-     * Your Tasks
-     * Identify all concurrency and asynchronous programming issues in the code
-     * Fix the implementation to ensure:
-     * All items are properly processed before the CompletableFuture completes
-     * Thread safety for all shared state
-     * Proper error handling and propagation
-     * Efficient use of system resources
-     * Correct use of Spring's @Async annotation
-     * Add appropriate comments explaining your changes and why they fix the issues
-     * Write a brief explanation of what was wrong with the original implementation
-     *
-     * Hints
-     * Consider how CompletableFuture composition can help coordinate multiple async operations
-     * Think about appropriate thread-safe collections
-     * Examine how errors are handled and propagated
-     * Consider the interaction between Spring's @Async and CompletableFuture
-     */
     @Async
-    public List<Item> processItemsAsync() {
+    public CompletableFuture<List<Item>> processItemsAsync() {
 
+        // Clear the previous state before starting a new async processing cycle
+        // Important to avoid mixing results from previous executions
+        processedItems.clear();
+        processedCount.set(0);
+
+        // Get all item IDs from the database instead of loading entire objects
+        // This reduces memory usage and speeds up initial loading
         List<Long> itemIds = itemRepository.findAllIds();
+        List<CompletableFuture<Void>> futures = new ArrayList<>();
 
         for (Long id : itemIds) {
-            CompletableFuture.runAsync(() -> {
+            // Each item is processed in a separate thread for better performance and scalability
+            CompletableFuture<Void> future = CompletableFuture.runAsync(() -> {
                 try {
-                    Thread.sleep(100);
-
+                    // Fetch item by ID inside the thread to avoid sharing non-thread-safe objects
                     Item item = itemRepository.findById(id).orElse(null);
-                    if (item == null) {
-                        return;
+                    if (item != null) {
+                        item.setStatus("PROCESSED");
+                        itemRepository.save(item);
+
+                        // Safe to update shared structures due to thread-safe types (CopyOnWriteArrayList, AtomicInteger)
+                        processedItems.add(item);
+                        processedCount.incrementAndGet();
                     }
-
-                    processedCount++;
-
-                    item.setStatus("PROCESSED");
-                    itemRepository.save(item);
-                    processedItems.add(item);
-
-                } catch (InterruptedException e) {
-                    System.out.println("Error: " + e.getMessage());
+                } catch (Exception e) {
+                    // Log errors instead of printing them — better for debugging and monitoring in real applications
+                    logger.error("Saving failed for item ID {}: {}", id, e.getMessage());
                 }
             }, executor);
+
+            futures.add(future);
         }
 
-        return processedItems;
+        // Wait for all threads to finish to ensure consistent and complete results
+        CompletableFuture.allOf(futures.toArray(new CompletableFuture[0])).join();
+
+        // Return a fresh copy to prevent accidental external modification of internal list
+        return CompletableFuture.completedFuture(new CopyOnWriteArrayList<>(processedItems));
     }
 
 }
-

@@ -9,6 +9,7 @@ import lombok.AllArgsConstructor;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.Setter;
+import jakarta.validation.constraints.Pattern;
 
 @Entity
 @Getter
@@ -23,6 +24,11 @@ public class Item {
     private String description;
     private String status;
 
-    // Add email regex validation
+
+    //Email regex validation
+    @Pattern(
+            regexp = "^[A-Za-z0-9+_.-]+@[A-Za-z0-9.-]+$",
+            message = "Email-ul nu este valid"
+    )
     private String email;
 }
